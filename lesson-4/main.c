@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 #define MIN_Y 2
-enum
+enum commands
 {
     LEFT = 1,
     UP,
@@ -18,9 +18,10 @@ enum
 enum
 {
     MAX_TAIL_SIZE = 100,
-    START_TAIL_SIZE = 30,
+    START_TAIL_SIZE = 3,
     MAX_FOOD_SIZE = 20,
-    FOOD_EXPIRE_SECONDS = 10
+    FOOD_EXPIRE_SECONDS = 10,
+    SEED_NUMBER = 3
 };
 enum GameState
 {
@@ -30,7 +31,7 @@ enum GameState
 };
 
 // Здесь храним коды управления змейкой
-struct control_buttons
+typedef struct
 {
     int down;
     int up;
@@ -38,7 +39,11 @@ struct control_buttons
     int right;
 } control_buttons;
 
-struct control_buttons default_controls = {KEY_DOWN, KEY_UP, KEY_LEFT, KEY_RIGHT};
+#define CONTROLS 3
+control_buttons default_controls[CONTROLS] = {
+    {KEY_DOWN, KEY_UP, KEY_LEFT, KEY_RIGHT},
+    {'s', 'w', 'a', 'd'},
+    {'S', 'W', 'A', 'D'}};
 
 /*
  Голова змейки содержит в себе
@@ -54,7 +59,7 @@ typedef struct snake_t
     int direction;
     size_t tsize;
     struct tail_t *tail;
-    struct control_buttons controls;
+    control_buttons *controls;
 } snake_t;
 
 /*
@@ -65,6 +70,71 @@ typedef struct tail_t
     int x;
     int y;
 } tail_t;
+
+/*
+ Еда — это массив точек, состоящий из координат x,y, времени,
+ когда данная точка была установлена, и поля, сигнализирующего,
+ была ли данная точка съедена.
+ */
+struct food
+{
+    int x;
+    int y;
+    time_t put_time;
+    char point;
+    uint8_t enable;
+} food[MAX_FOOD_SIZE];
+
+void initFood(struct food f[], size_t size)
+{
+    struct food init = {0, 0, 0, 0, 0};
+    for (size_t i = 0; i < size; i++)
+    {
+        f[i] = init;
+    }
+}
+/*
+ Обновить/разместить текущее зерно на поле
+ */
+void putFoodSeed(struct food *fp)
+{
+    int max_x = 0, max_y = 0;
+    char spoint[2] = {0};
+    getmaxyx(stdscr, max_y, max_x);
+    mvprintw(fp->y, fp->x, " ");
+    fp->x = rand() % (max_x - 1);
+    fp->y = rand() % (max_y - 2) + 1; // Не занимаем верхнюю строку
+    fp->put_time = time(NULL);
+    fp->point = '$';
+    fp->enable = 1;
+    spoint[0] = fp->point;
+    mvprintw(fp->y, fp->x, "%s", spoint);
+}
+
+/*
+ Разместить еду на поле
+ */
+void putFood(struct food f[], size_t number_seeds)
+{
+    for (size_t i = 0; i < number_seeds; i++)
+    {
+        putFoodSeed(&f[i]);
+    }
+}
+
+void refreshFood(struct food f[], int nfood)
+{
+    for (size_t i = 0; i < nfood; i++)
+    {
+        if (f[i].put_time)
+        {
+            if (!f[i].enable || (time(NULL) - f[i].put_time) > FOOD_EXPIRE_SECONDS)
+            {
+                putFoodSeed(&f[i]);
+            }
+        }
+    }
+}
 
 void initTail(struct tail_t t[], size_t size)
 {
@@ -141,16 +211,63 @@ int go(struct snake_t *head)
     return 0;
 }
 
+int getDirection(snake_t *snake, const int32_t key)
+{
+    for (uint8_t i = 0; i < CONTROLS; i++)
+    {
+        if (key == snake->controls[i].down)
+        {
+            return DOWN;
+        }
+        else if (key == snake->controls[i].up)
+        {
+            return UP;
+        }
+        else if (key == snake->controls[i].right)
+        {
+            return RIGHT;
+        }
+        else if (key == snake->controls[i].left)
+        {
+            return LEFT;
+        }
+    }
+    return -1;
+}
+
+// Returns 0 if the direction is incorrect
+int checkDirection(snake_t *snake, const int32_t key)
+{
+    const int command = getDirection(snake, key);
+    enum commands opposite;
+    switch (command)
+    {
+    case LEFT:
+        opposite = RIGHT;
+        break;
+    case RIGHT:
+        opposite = LEFT;
+        break;
+    case UP:
+        opposite = DOWN;
+        break;
+    case DOWN:
+        opposite = UP;
+        break;
+    default:
+        return 0;
+    }
+    if (snake->direction == opposite)
+    {
+        return 0;
+    }
+    return 1;
+}
+
 void changeDirection(struct snake_t *snake, const int32_t key)
 {
-    if (key == snake->controls.down)
-        snake->direction = DOWN;
-    else if (key == snake->controls.up)
-        snake->direction = UP;
-    else if (key == snake->controls.right)
-        snake->direction = RIGHT;
-    else if (key == snake->controls.left)
-        snake->direction = LEFT;
+    if (checkDirection(snake, key))
+        snake->direction = getDirection(snake, key);
 }
 
 /*
@@ -203,6 +320,8 @@ int main()
     mvprintw(0, 0, "Use arrows for control. Press 'F10' for EXIT");
     clockTimeout(0); // Отключаем таймаут после нажатия клавиши в цикле
     enum GameState state = ONGOING;
+    initFood(food, MAX_FOOD_SIZE);
+    putFood(food, SEED_NUMBER); // Кладем зерна
     int key_pressed = 0;
     while (key_pressed != STOP_GAME)
     {
@@ -215,7 +334,8 @@ int main()
                 continue;
             }
             goTail(snake);
-            clockTimeout(100); // Задержка при отрисовке
+            clockTimeout(100);              // Задержка при отрисовке
+            refreshFood(food, SEED_NUMBER); // Обновляем еду
             changeDirection(snake, key_pressed);
         }
         else
